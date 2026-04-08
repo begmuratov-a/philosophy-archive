@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://ryexcvwuxaiginhidcuj.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5ZXhjdnd1eGFpZ2luaGlkY3VqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1NDg3NTksImV4cCI6MjA5MTEyNDc1OX0.kPTGEoE7Z28TiO93jdPRprBUDX7JOHhLnByjNA-EH-g";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ADMIN_PASSWORD = "summit2026";
-const STORAGE_KEY = "ts_philosophy_entries_v2";
+const TOTAL = 30;
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -96,11 +101,13 @@ const styles = `
   .btn { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:0.15em; text-transform:uppercase; padding:0.6rem 1.4rem; border:1px solid; cursor:pointer; transition:all 0.2s; }
   .btn-gold { background:var(--gold); border-color:var(--gold); color:var(--bg); }
   .btn-gold:hover { background:var(--gold-bright); border-color:var(--gold-bright); }
+  .btn-gold:disabled { opacity:0.5; cursor:default; }
   .btn-outline { background:transparent; border-color:var(--border-gold); color:var(--text-dim); }
   .btn-outline:hover { border-color:var(--gold-dim); color:var(--gold); }
   .btn-sm { padding:0.3rem 0.7rem; font-size:0.55rem; }
   .btn-row { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
   .success-msg { font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:#7ab87a; padding:0.45rem 0.85rem; border:1px solid var(--green); background:rgba(58,107,58,0.1); }
+  .error-msg { font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:#c47a7a; padding:0.45rem 0.85rem; border:1px solid var(--red); background:rgba(139,58,58,0.1); }
 
   .existing-list { margin-top:2rem; }
   .existing-item { display:flex; align-items:center; gap:0.85rem; padding:0.75rem 0; border-bottom:1px solid var(--border); }
@@ -112,6 +119,8 @@ const styles = `
   .icon-btn { background:transparent; border:1px solid var(--border); color:var(--text-muted); cursor:pointer; padding:0.28rem 0.6rem; font-family:'JetBrains Mono',monospace; font-size:0.56rem; transition:all 0.2s; }
   .icon-btn:hover { border-color:var(--gold-dim); color:var(--gold); }
   .icon-btn.del:hover { border-color:var(--red); color:#c47a7a; }
+
+  .loading { text-align:center; padding:4rem; font-family:'JetBrains Mono',monospace; font-size:0.65rem; color:var(--text-muted); letter-spacing:0.2em; text-transform:uppercase; }
 
   .empty-state { text-align:center; padding:5rem 2rem; }
   .empty-state-icon { font-size:3rem; margin-bottom:1rem; opacity:0.35; }
@@ -147,18 +156,9 @@ function compressImage(file, maxW = 800, q = 0.78) {
   });
 }
 
-function load() {
-  try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : {}; }
-  catch { return {}; }
-}
-function save(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
-}
-
-const TOTAL = 30;
-
 export default function App() {
   const [entries, setEntries] = useState({});
+  const [loading, setLoading] = useState(true);
   const [view, setView] = useState("archive");
   const [selected, setSelected] = useState(null);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
@@ -168,16 +168,27 @@ export default function App() {
   const [editContent, setEditContent] = useState("");
   const [editPhilosopher, setEditPhilosopher] = useState("");
   const [editPhoto, setEditPhoto] = useState(null);
-  const [editingKey, setEditingKey] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const fileRef = useRef();
 
-  useEffect(() => { setEntries(load()); }, []);
+  useEffect(() => { fetchEntries(); }, []);
+
+  async function fetchEntries() {
+    setLoading(true);
+    const { data, error } = await supabase.from("entries").select("*").order("day");
+    if (!error && data) {
+      const map = {};
+      data.forEach(e => { map[e.day] = e; });
+      setEntries(map);
+    }
+    setLoading(false);
+  }
 
   const filledDays = Object.keys(entries).map(Number).sort((a, b) => a - b);
   const filledCount = filledDays.length;
-
-  function persist(u) { setEntries(u); save(u); }
 
   function handleCellClick(day) { if (entries[day]) setSelected(day); }
 
@@ -185,10 +196,14 @@ export default function App() {
     const e = entries[day];
     setEditDay(day); setEditTitle(e.title || ""); setEditContent(e.content || "");
     setEditPhilosopher(e.philosopher || ""); setEditPhoto(e.photo || null);
-    setEditingKey(day); setView("admin"); setAdminUnlocked(true); setSaved(false);
+    setEditingId(e.id); setView("admin"); setAdminUnlocked(true); setSaved(false); setSaveError("");
   }
 
-  function handleDelete(day) { const u = { ...entries }; delete u[day]; persist(u); }
+  async function handleDelete(day) {
+    const e = entries[day];
+    await supabase.from("entries").delete().eq("id", e.id);
+    await fetchEntries();
+  }
 
   async function handlePhotoUpload(e) {
     const file = e.target.files?.[0];
@@ -196,17 +211,37 @@ export default function App() {
     setEditPhoto(await compressImage(file));
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!editTitle.trim()) return;
-    persist({ ...entries, [editDay]: { day: editDay, title: editTitle.trim(), content: editContent.trim(), philosopher: editPhilosopher.trim(), photo: editPhoto || null } });
-    setSaved(true); setEditTitle(""); setEditContent(""); setEditPhilosopher(""); setEditPhoto(null); setEditingKey(null);
-    setTimeout(() => setSaved(false), 3000);
+    setSaving(true); setSaveError("");
+    const payload = { day: editDay, title: editTitle.trim(), content: editContent.trim(), philosopher: editPhilosopher.trim(), photo: editPhoto || null };
+    let error;
+    if (editingId) {
+      ({ error } = await supabase.from("entries").update(payload).eq("id", editingId));
+    } else {
+      // check if day already exists
+      const existing = entries[editDay];
+      if (existing) {
+        ({ error } = await supabase.from("entries").update(payload).eq("id", existing.id));
+      } else {
+        ({ error } = await supabase.from("entries").insert(payload));
+      }
+    }
+    if (error) {
+      setSaveError("Error saving. Try again.");
+    } else {
+      await fetchEntries();
+      setSaved(true);
+      setEditTitle(""); setEditContent(""); setEditPhilosopher(""); setEditPhoto(null); setEditingId(null);
+      setTimeout(() => setSaved(false), 3000);
+    }
+    setSaving(false);
   }
 
   function handleSelectDay(d) {
     const n = Number(d); setEditDay(n);
-    if (entries[n]) { setEditTitle(entries[n].title || ""); setEditContent(entries[n].content || ""); setEditPhilosopher(entries[n].philosopher || ""); setEditPhoto(entries[n].photo || null); setEditingKey(n); }
-    else { setEditTitle(""); setEditContent(""); setEditPhilosopher(""); setEditPhoto(null); setEditingKey(null); }
+    if (entries[n]) { setEditTitle(entries[n].title || ""); setEditContent(entries[n].content || ""); setEditPhilosopher(entries[n].philosopher || ""); setEditPhoto(entries[n].photo || null); setEditingId(entries[n].id); }
+    else { setEditTitle(""); setEditContent(""); setEditPhilosopher(""); setEditPhoto(null); setEditingId(null); }
   }
 
   function handleAdminLogin() {
@@ -222,8 +257,6 @@ export default function App() {
       <style>{styles}</style>
       <div className="app">
         <div className="app-body">
-
-          {/* HEADER */}
           <header className="header">
             <div className="header-label">Summit Labs · True Strategist</div>
             <div className="header-title">30-Day Philosophy Challenge</div>
@@ -249,27 +282,31 @@ export default function App() {
           {/* ARCHIVE */}
           {view==="archive" && (
             <div className="archive">
-              <div className="grid">
-                {Array.from({length:TOTAL},(_,i)=>i+1).map(day => {
-                  const e = entries[day];
-                  return (
-                    <div key={day} className={`day-cell ${e?"filled":"empty"}`} onClick={()=>handleCellClick(day)}>
-                      {e?.photo && <div className="day-cell-photo" style={{backgroundImage:`url(${e.photo})`}} />}
-                      <div className="day-cell-inner">
-                        <div className="day-num">{day}</div>
-                        <div className="day-cell-label">Day</div>
-                        {e && <div className="day-title-preview">{e.title}</div>}
-                      </div>
+              {loading ? <div className="loading">Loading entries...</div> : (
+                <>
+                  <div className="grid">
+                    {Array.from({length:TOTAL},(_,i)=>i+1).map(day => {
+                      const e = entries[day];
+                      return (
+                        <div key={day} className={`day-cell ${e?"filled":"empty"}`} onClick={()=>handleCellClick(day)}>
+                          {e?.photo && <div className="day-cell-photo" style={{backgroundImage:`url(${e.photo})`}} />}
+                          <div className="day-cell-inner">
+                            <div className="day-num">{day}</div>
+                            <div className="day-cell-label">Day</div>
+                            {e && <div className="day-title-preview">{e.title}</div>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {filledCount===0 && (
+                    <div className="empty-state" style={{marginTop:"2rem"}}>
+                      <div className="empty-state-icon">📜</div>
+                      <h3>No entries yet</h3>
+                      <p>Go to Admin to start adding your philosophy challenge days.</p>
                     </div>
-                  );
-                })}
-              </div>
-              {filledCount===0 && (
-                <div className="empty-state" style={{marginTop:"2rem"}}>
-                  <div className="empty-state-icon">📜</div>
-                  <h3>No entries yet</h3>
-                  <p>Go to Admin to start adding your philosophy challenge days.</p>
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -277,7 +314,7 @@ export default function App() {
           {/* LIST */}
           {view==="list" && (
             <div className="list-view">
-              {filledCount===0 ? (
+              {loading ? <div className="loading">Loading entries...</div> : filledCount===0 ? (
                 <div className="empty-state">
                   <div className="empty-state-icon">📜</div>
                   <h3>No entries yet</h3>
@@ -288,8 +325,7 @@ export default function App() {
                 return (
                   <div key={day} className="list-item" onClick={()=>{setSelected(day);setView("archive");}}>
                     <div className="list-item-num">{day}</div>
-                    {e.photo
-                      ? <img src={e.photo} className="list-philosopher-thumb" alt={e.philosopher||""} />
+                    {e.photo ? <img src={e.photo} className="list-philosopher-thumb" alt={e.philosopher||""} />
                       : <div className="list-philosopher-placeholder">🏛</div>}
                     <div className="list-info">
                       <div className="list-title">{e.title}</div>
@@ -334,15 +370,14 @@ export default function App() {
                   </div>
                   <div className="form-group">
                     <label className="form-label">Philosopher Featured</label>
-                    <input className="form-input" type="text" placeholder="e.g. Marcus Aurelius, Nietzsche, Ibn Khaldun..."
+                    <input className="form-input" type="text" placeholder="e.g. Marcus Aurelius, Nietzsche..."
                       value={editPhilosopher} onChange={e=>setEditPhilosopher(e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Philosopher Photo</label>
                     <input type="file" accept="image/*" ref={fileRef} style={{display:"none"}} onChange={handlePhotoUpload} />
                     <div className="photo-upload-area" onClick={()=>fileRef.current.click()}>
-                      {editPhoto
-                        ? <img src={editPhoto} className="photo-preview" alt="preview" />
+                      {editPhoto ? <img src={editPhoto} className="photo-preview" alt="preview" />
                         : <div className="photo-placeholder">🏛</div>}
                       <div className="photo-upload-text">
                         <p><span>Click to upload</span> a photo of the philosopher.<br />
@@ -351,9 +386,7 @@ export default function App() {
                       </div>
                     </div>
                     {editPhoto && (
-                      <button className="btn btn-outline btn-sm" style={{marginTop:"0.5rem"}} onClick={()=>setEditPhoto(null)}>
-                        Remove photo
-                      </button>
+                      <button className="btn btn-outline btn-sm" style={{marginTop:"0.5rem"}} onClick={()=>setEditPhoto(null)}>Remove photo</button>
                     )}
                   </div>
                   <div className="form-group">
@@ -362,9 +395,13 @@ export default function App() {
                       value={editContent} onChange={e=>setEditContent(e.target.value)} />
                   </div>
                   <div className="btn-row">
-                    <button className="btn btn-gold" onClick={handleSave}>{editingKey?"Update Entry":"Save Entry"}</button>
-                    {saved && <span className="success-msg">✓ Saved successfully</span>}
+                    <button className="btn btn-gold" onClick={handleSave} disabled={saving}>
+                      {saving ? "Saving..." : editingId ? "Update Entry" : "Save Entry"}
+                    </button>
+                    {saved && <span className="success-msg">✓ Saved & live for everyone</span>}
+                    {saveError && <span className="error-msg">✕ {saveError}</span>}
                   </div>
+
                   {filledCount>0 && (
                     <div className="existing-list">
                       <div className="admin-section-title" style={{marginTop:"2rem"}}>Saved Entries ({filledCount})</div>
@@ -389,7 +426,7 @@ export default function App() {
           )}
         </div>
 
-        {/* DETAIL OVERLAY */}
+        {/* DETAIL */}
         {selected && selEntry && (
           <div className="detail-overlay" onClick={e=>{if(e.target===e.currentTarget)setSelected(null);}}>
             <div className="detail-card">
@@ -412,10 +449,9 @@ export default function App() {
           </div>
         )}
 
-        {/* FOOTER */}
         <footer className="footer">
           <div className="footer-logo">Summit Labs</div>
-          <div className="footer-tagline">Building from Tashkent · Est. 2024</div>
+          <div className="footer-tagline">Building from Tashkent · Est. 2026</div>
           <a href="https://t.me/summit_labs" target="_blank" rel="noopener noreferrer" className="footer-link">
             ✈ &nbsp;t.me/summit_labs
           </a>
